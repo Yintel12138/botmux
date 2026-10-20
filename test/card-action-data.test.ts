@@ -54,6 +54,31 @@ describe('Lark callback payload normalization', () => {
     expect(data.operator).toBeUndefined();
     expect(data.context).toBeUndefined();
     expect(data.action?.value?.action).toBe('feedback_submit');
+    // The reconstructed nested event must not inherit outer identity either,
+    // and its action must be the normalized one.
+    expect((data.event as any)?.operator).toBeUndefined();
+    expect((data.event as any)?.context).toBeUndefined();
+    expect((data.event as any)?.action?.value?.action).toBe('feedback_submit');
+  });
+
+  it('mirrors normalization into the nested event while keeping the inner operator', () => {
+    const data = normalizeCardActionData({
+      header: { event_id: 'evt_click' },
+      operator: { open_id: 'ou_outer' }, context: { open_message_id: 'om_outer' },
+      event: {
+        operator: { open_id: 'ou_inner' }, context: { open_message_id: 'om_inner' },
+        action: { value: JSON.stringify(value) },
+      },
+    });
+    // Top level and nested event both resolve to the INNER, platform-verified identity.
+    expect(data.operator?.open_id).toBe('ou_inner');
+    expect(data.context?.open_message_id).toBe('om_inner');
+    expect((data.event as any)?.operator?.open_id).toBe('ou_inner');
+    expect((data.event as any)?.context?.open_message_id).toBe('om_inner');
+    // Normalized value is present at both views; outer operator never appears.
+    expect(data.action?.value).toEqual(value);
+    expect((data.event as any)?.action?.value).toEqual(value);
+    expect(JSON.stringify(data)).not.toContain('ou_outer');
   });
 
   it.each([undefined, null, [], 'invalid', { action: { behaviors: {} } }, { action: { behaviors: [null, { type: 'open_url', value }] } }].map(raw => [raw]))(

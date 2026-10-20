@@ -2374,9 +2374,11 @@ describe('Lark event dispatcher — durable primary processor', () => {
     },
   );
 
-  it.each(['close', 'resume'] as const)(
-    'persists a stable %s interaction before ACK when a control consumer is wired',
-    async action => {
+  it.each(['close', 'resume'].flatMap(action =>
+    ['object', 'string', 'behaviors', 'envelope', 'envelope-behaviors'].map(shape => [action, shape]),
+  ))(
+    'persists a stable %s interaction in %s payloads before ACK when a control consumer is wired',
+    async (action, shape) => {
       setupBotState({ allowedUsers: [USER_OPEN_ID] });
       const handlers = makeHandlers();
       const enqueuePrimary = vi.fn(async () => ({ kind: 'inserted' as const }));
@@ -2391,26 +2393,40 @@ describe('Lark event dispatcher — durable primary processor', () => {
       );
       runtime.connect();
 
-      const data = {
-        event_id: `evt_${action}_1`,
-        action: {
-          value: {
-            action,
-            session_id: 'session-primary',
-            root_id: 'om_primary_root',
-          },
-        },
+      const value = {
+        action,
+        session_id: 'session-primary',
+        root_id: 'om_primary_root',
+      };
+      const wrapped = shape === 'envelope' || shape === 'envelope-behaviors';
+      const innerShape = shape === 'envelope' ? 'string' : shape;
+      const inner = {
+        action: innerShape === 'behaviors' || innerShape === 'envelope-behaviors'
+          ? { behaviors: [{ type: 'callback', value }] }
+          : { value: innerShape === 'object' ? value : JSON.stringify(value) },
         operator: { open_id: USER_OPEN_ID },
         context: { open_message_id: 'om_primary_lifecycle' },
       };
+      const data = wrapped
+        ? { header: { event_id: `evt_${action}_1` }, event: inner }
+        : { event_id: `evt_${action}_1`, ...inner };
       const result = await capturedHandlers['card.action.trigger'](data);
 
       expect(result).toMatchObject({ toast: { type: 'info' } });
-      expect(enqueuePrimaryControl).toHaveBeenCalledWith({
+      expect(enqueuePrimaryControl).toHaveBeenCalledTimes(1);
+      expect(enqueuePrimaryControl).toHaveBeenCalledWith(expect.objectContaining({
         eventId: `card.action.trigger:${MY_APP_ID}:evt_${action}_1`,
         partitionKey: `lark-session-control:${MY_APP_ID}:session-primary`,
-        data,
-      });
+      }));
+      // The enqueued payload must already be normalized, including the nested
+      // event of an envelope, because the durable ingress validates strictly.
+      const enqueued = enqueuePrimaryControl.mock.calls[0][0];
+      expect(enqueued.data.action.value).toEqual(value);
+      expect(enqueued.data.operator).toEqual({ open_id: USER_OPEN_ID });
+      expect(enqueued.data.context).toEqual({ open_message_id: 'om_primary_lifecycle' });
+      if (wrapped) {
+        expect(enqueued.data.event.action.value).toEqual(value);
+      }
       expect(handlers.handleCardAction).not.toHaveBeenCalled();
       expect(enqueuePrimary).not.toHaveBeenCalled();
       runtime.close();

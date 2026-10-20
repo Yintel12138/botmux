@@ -33,7 +33,12 @@ export function normalizeCardActionData(input: unknown): CardActionData {
   return {
     ...event,
     ...(wrapped ? {
-      header: input.header, event: input.event,
+      header: input.header,
+      // Mirror the normalized action back into the nested event as well:
+      // downstream strict parsers (e.g. durable session control ingress) read
+      // inner event.action first. Keep the inner event's own operator/context;
+      // outer identity fields must never leak into the event body.
+      event: { ...event, action: { ...action, value } },
       event_id: input.event_id ?? event.event_id, uuid: input.uuid ?? event.uuid,
     } : {}),
     action: { ...action, value },
